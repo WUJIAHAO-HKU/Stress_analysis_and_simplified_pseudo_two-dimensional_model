@@ -1,0 +1,29 @@
+# Ignore everything
+*
+*/
+
+# But keep these folders and their contents
+!.vscode/
+!.vscode/**
+!example/
+!example/**
+!src/
+!src/**
+!最新的进展/
+!最新的进展/**
+!.gitignore
+!README.md
+!LICENSE
+
+# Ignore large CSV files
+src/data/sig_tsurf_test1111.csv
+
+# Ignore all CSV files in root
+/*.csv
+
+# Ignore text files in root
+/*.txt
+
+# Ignore Git folder even if selected
+Git/
+Git/**

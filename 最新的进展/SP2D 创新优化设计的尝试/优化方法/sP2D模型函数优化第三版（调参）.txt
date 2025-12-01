@@ -1,0 +1,145 @@
+主要改进包括：
+
+边界层参数微调：
+
+略微增加边界层厚度
+
+//优化修正系数
+
+//多项式拟合优化：
+
+//微调三次项系数
+
+//添加小量修正项
+
+//过渡函数改进：
+
+//添加额外的平滑项
+
+//优化过渡区域的连续性
+
+//三角函数优化：
+
+//微调谐波系数
+
+//添加二次谐波修正
+
+//边界处理优化：
+
+//微调权重分配
+
+//改进平滑效果
+
+function phie_fit(x::Union{Array{Float64},Float64}, Li::Array{Float64}, ki::Array{Float64}, phie0::Float64, typef::String="sin")
+    Ln, Ls, Lp = Li
+    kn, ks, kp = ki
+    L = Ln + Ls + Lp
+    phie = zeros(length(x))
+
+    # 微调边界层参数
+    δn = 0.055 * Ln  # 略微增加边界层厚度
+    δp = 0.055 * Lp
+    
+    if typef == "sin"
+        for i in eachindex(x)
+            if x[i] <= Ln
+                # 负极区域：优化的多项式拟合
+                t = x[i]/Ln
+                # 微调四阶多项式系数
+                phie[i] = kn * (0.5*t^2 - 0.35*t^3 + 0.1*t^4) - kn * Ln/2 - ks * Ls/2 + phie0
+                
+                # 优化边界层修正
+                if x[i] >= Ln - δn
+                    β = (x[i] - (Ln - δn))/δn
+                    # 改进的过渡函数
+                    correction = 0.155 * kn * δn * (β^2 * (3 - 2β) + 0.1*β*(1 - β))
+                    phie[i] += correction
+                end
+                
+            elseif x[i] < Ln + Ls
+                # 隔膜区域：优化的非线性插值
+                t = (x[i] - Ln)/Ls
+                # 改进的过渡函数
+                base = ks * (x[i] - Ln - Ls/2)
+                transition = t^2 * (3 - 2t) + 0.1*t*(1 - t)  # 增加平滑度
+                correction = 0.155 * ks * Ls * (transition - 0.5)
+                phie[i] = base + correction + phie0
+                
+            else
+                # 正极区域：优化的多项式拟合
+                t = (x[i] - (Ln + Ls))/Lp
+                # 微调四阶多项式系数
+                phie[i] = -kp * (0.5*t^2 - 0.35*t^3 + 0.1*t^4) + kp * Lp/2 + ks * Ls/2 + phie0
+                
+                # 优化边界层修正
+                if x[i] <= Ln + Ls + δp
+                    β = (x[i] - (Ln + Ls))/δp
+                    # 改进的过渡函数
+                    correction = 0.155 * kp * δp * (β^2 * (3 - 2β) + 0.1*β*(1 - β))
+                    phie[i] += correction
+                end
+            end
+            
+        end
+    elseif typef == "quad"
+        pi = acos(-1.0)
+        for i in eachindex(x)
+            if x[i] <= Ln
+                # 负极区域：优化的三角函数
+                t = x[i]/Ln
+                # 微调谐波系数
+                phie[i] = -2 * kn * Ln/pi * (
+                    cos(pi*t/2) + 
+                    0.125*cos(3*pi*t/2) + 
+                    0.032*cos(5*pi*t/2)
+                ) - ks * Ls/2 + phie0
+                
+                # 优化边界层修正
+                if x[i] >= Ln - δn
+                    β = (x[i] - (Ln - δn))/δn
+                    correction = 0.155 * kn * δn * (sin(pi*β) + 0.1*sin(2*pi*β))
+                    phie[i] += correction
+                end
+                
+            elseif x[i] < Ln + Ls
+                # 隔膜区域：优化的非线性插值
+                t = (x[i] - Ln)/Ls
+                # 改进的过渡函数
+                base = ks * (x[i] - Ln - Ls/2)
+                transition = 0.5 * (1 - cos(pi*t)) + 0.05 * sin(2*pi*t)
+                correction = 0.155 * ks * Ls * (transition - 0.5)
+                phie[i] = base + correction + phie0
+                
+            else
+                # 正极区域：优化的三角函数
+                t = (x[i] - (Ln + Ls))/Lp
+                # 微调谐波系数
+                phie[i] = 2 * kp * Lp/pi * (
+                    sin(pi*t/2) + 
+                    0.125*sin(3*pi*t/2) + 
+                    0.032*sin(5*pi*t/2)
+                ) + ks * Ls/2 + phie0
+                
+                # 优化边界层修正
+                if x[i] <= Ln + Ls + δp
+                    β = (x[i] - (Ln + Ls))/δp
+                    correction = 0.155 * kp * δp * (sin(pi*β) + 0.1*sin(2*pi*β))
+                    phie[i] += correction
+                end
+            end
+        end
+    end
+
+    # 优化的边界处理
+    for i in eachindex(x)
+        if abs(x[i] - Ln) < 1e-10 || abs(x[i] - (Ln + Ls)) < 1e-10
+            if i > 2 && i < length(x) - 1
+                # 微调权重
+                w1, w2, w3, w4 = 0.12, 0.38, 0.38, 0.12
+                phie[i] = w1*phie[i-2] + w2*phie[i-1] + w3*phie[i+1] + w4*phie[i+2]
+            end
+        end
+    end
+
+    return phie
+end

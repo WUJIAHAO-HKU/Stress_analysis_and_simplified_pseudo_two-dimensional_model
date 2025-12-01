@@ -1,0 +1,4 @@
+parameter,value
+cubic_coef,0.3
+sep_coef,0.12
+harm_coef,0.08

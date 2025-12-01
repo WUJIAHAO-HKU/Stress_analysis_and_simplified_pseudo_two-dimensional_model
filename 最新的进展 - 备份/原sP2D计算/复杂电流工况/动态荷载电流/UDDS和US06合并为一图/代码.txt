@@ -1,0 +1,422 @@
+using Plots, CSV, DataFrames, Interpolations, Statistics, StatsBase
+include("../src/JuBat.jl") 
+# 设置数据路径
+path = "D:/竞赛和课程文件/课程文件/毕业设计/SRC/data/drive_cycles/"
+
+# 读取UDDS数据
+udds_data = CSV.read(path * "UDDS.csv", DataFrame, header = 1)
+time_udds = udds_data[:, "Time"]
+current_udds = udds_data[:, " Current"]
+
+# 创建电流插值函数，用于获取任意时间点的电流值
+current_interp_UDDS = LinearInterpolation(time_udds, current_udds, extrapolation_bc=Flat())
+
+# 设置电池参数
+param_dim = JuBat.ChooseCell("LG M50")
+param_dim.cell.v_h = 4.3
+
+# 设置模拟选项
+opt = JuBat.Option()
+opt.mechanicalmodel = "full"
+opt.model = "P2D"  # 使用P2D模型
+opt.time = collect(Float64, 0:1:maximum(time_udds))  # 以1秒的间隔进行模拟
+
+# 设置电流函数为UDDS表格中的数据
+opt.Current = t -> current_interp_UDDS(t)
+
+# 创建和运行P2D模型模拟
+println("开始模拟UDDS工况... P2D模型")
+case = JuBat.SetCase(param_dim, opt)
+result = JuBat.Solve(case)
+println("P2D模型模拟完成")
+
+# 测量P2D模型计算时间
+p2d_time = @elapsed begin
+    case = JuBat.SetCase(param_dim, opt)
+    result = JuBat.Solve(case)
+end
+println("P2D模型计算时间: ", p2d_time, " 秒")
+
+# 提取P2D模型结果数据
+UDDS_time = result["time [s]"]
+UDDS_voltage_p2d = result["cell voltage [V]"]
+UDDS_concentration_p2d = result["negative particle surface lithium concentration [mol/m^3]"]
+UDDS_stress_p2d = result["negative particle surface tangential stress[Pa]"]
+
+# 处理P2D模型结果的维度
+if ndims(UDDS_concentration_p2d) > 1
+    UDDS_concentration_p2d = UDDS_concentration_p2d[1, :]
+end
+
+if ndims(UDDS_stress_p2d) > 1
+    UDDS_stress_p2d = UDDS_stress_p2d[1, :]
+end
+
+# 设置sP2D模型
+opt.model = "sP2D"  # 使用sP2D模型
+opt.time = collect(Float64, 0:1:maximum(time_udds))  # 以1秒的间隔进行模拟
+println("开始模拟UDDS工况... sP2D模型")
+case_sP2D = JuBat.SetCase(param_dim, opt)
+result_sP2D = JuBat.Solve(case_sP2D)
+println("sP2D模型模拟完成")
+
+# 测量sP2D模型计算时间
+sp2d_time = @elapsed begin
+    case_sP2D = JuBat.SetCase(param_dim, opt)
+    result_sP2D = JuBat.Solve(case_sP2D)
+end
+println("sP2D模型计算时间: ", sp2d_time, " 秒")
+
+# 提取sP2D模型结果数据
+UDDS_voltage_sP2D = result_sP2D["cell voltage [V]"]
+UDDS_concentration_sP2D = result_sP2D["negative particle surface lithium concentration [mol/m^3]"]
+UDDS_stress_sP2D = result_sP2D["negative particle surface tangential stress[Pa]"]
+
+# 处理sP2D模型结果的维度
+if ndims(UDDS_concentration_sP2D) > 1
+    UDDS_concentration_sP2D = UDDS_concentration_sP2D[1, :]
+end
+
+if ndims(UDDS_stress_sP2D) > 1
+    UDDS_stress_sP2D = UDDS_stress_sP2D[1, :]
+end
+
+  # 计算绝对值差
+  UDDS_voltage_error = abs.(UDDS_voltage_sP2D) .- abs.(UDDS_voltage_p2d)
+  UDDS_concentration_error = abs.(UDDS_concentration_sP2D) .- abs.(UDDS_concentration_p2d)
+  UDDS_stress_error = abs.(UDDS_stress_sP2D) .- abs.(UDDS_stress_p2d)
+
+# 计算误差百分比
+UDDS_voltage_error_percentage = (UDDS_voltage_error ./ UDDS_voltage_p2d) .* 100
+UDDS_concentration_error_percentage = (UDDS_concentration_error ./ UDDS_concentration_p2d) .* 100
+UDDS_stress_error_percentage = (UDDS_stress_error ./ UDDS_stress_p2d) .* 100
+
+# 获取最大误差
+max_voltage_error = maximum(UDDS_voltage_error)
+max_concentration_error = maximum(UDDS_concentration_error)
+max_stress_error = maximum(UDDS_stress_error)
+
+# 获取最大误差百分比
+max_voltage_error_percentage = maximum(UDDS_voltage_error_percentage)
+max_concentration_error_percentage = maximum(UDDS_concentration_error_percentage)
+max_stress_error_percentage = maximum(UDDS_stress_error_percentage)
+
+# 计算平均绝对误差
+mean_voltage_error = mean(abs.(UDDS_voltage_error))
+mean_concentration_error = mean(abs.(UDDS_concentration_error))
+mean_stress_error = mean(abs.(UDDS_stress_error))
+
+# 计算平均误差百分比（排除除以零的情况）
+function safe_mean_percentage(errors, references)
+    valid_indices = findall(x -> x != 0, references)
+    isempty(valid_indices) ? 0.0 : mean(abs.(errors[valid_indices] ./ references[valid_indices])) * 100
+end
+
+mean_voltage_error_percentage = safe_mean_percentage(UDDS_voltage_error, UDDS_voltage_p2d)
+mean_concentration_error_percentage = safe_mean_percentage(UDDS_concentration_error, UDDS_concentration_p2d)
+mean_stress_error_percentage = safe_mean_percentage(UDDS_stress_error, UDDS_stress_p2d)
+
+# 创建误差百分比变化图
+p5 = plot(UDDS_time, UDDS_voltage_error_percentage, 
+    label="Voltage Error (%)", 
+    xlabel="Time [s]", 
+    ylabel="Error Percentage (%)",
+    title="Model Error Comparison (P2D vs sP2D)",
+    lw=2, color=:green, ylims=(-15, 15))  # 调整坐标范围
+
+plot!(UDDS_time, UDDS_concentration_error_percentage, 
+    label="Concentration Error (%)", 
+    lw=2, color=:blue)
+
+# 添加应力误差散点（仅有效点）
+scatter!(UDDS_time, UDDS_stress_error_percentage, 
+    label="Stress Error (%)", 
+    markershape=:diamond, markercolor=:red, 
+    markersize=2)
+
+
+# 打印最大误差和最大误差百分比
+println("最大电压误差: $max_voltage_error V")
+println("平均电压误差: $mean_voltage_error V")
+println("最大电压误差百分比: $max_voltage_error_percentage %")
+println("平均电压误差百分比: $mean_voltage_error_percentage %")
+println("最大浓度误差: $max_concentration_error mol/m³")
+println("平均浓度误差: $mean_concentration_error mol/m³")
+println("最大浓度误差百分比: $max_concentration_error_percentage %")
+println("平均浓度误差百分比: $mean_concentration_error_percentage %")
+println("最大应力误差: $max_stress_error Pa")
+println("平均应力误差: $mean_stress_error Pa")
+println("最大应力误差百分比: $max_stress_error_percentage %")
+println("平均应力误差百分比: $mean_stress_error_percentage %")
+
+# 读取US06数据
+us06_data = CSV.read(path * "US06.csv", DataFrame, header = 1)
+time_us06 = us06_data[:, "time"]
+current_us06 = us06_data[:, "current"]
+
+# 创建电流插值函数，用于获取任意时间点的电流值
+current_interp_US06 = LinearInterpolation(time_us06, current_us06, extrapolation_bc=Flat())
+
+# 设置电池参数
+param_dim = JuBat.ChooseCell("LG M50")
+param_dim.cell.v_h = 4.3
+
+# 设置模拟选项
+opt = JuBat.Option()
+opt.mechanicalmodel = "full"
+opt.model = "P2D"  # 使用P2D模型
+opt.time = collect(Float64, 0:1:maximum(time_us06))  # 以1秒的间隔进行模拟
+
+# 设置电流函数为US06表格中的数据
+opt.Current = t -> current_interp_US06(t)
+
+# 创建和运行P2D模型模拟
+println("开始模拟us06工况... P2D模型")
+case = JuBat.SetCase(param_dim, opt)
+result = JuBat.Solve(case)
+println("P2D模型模拟完成")
+
+# 测量P2D模型计算时间
+p2d_time = @elapsed begin
+    case = JuBat.SetCase(param_dim, opt)
+    result = JuBat.Solve(case)
+end
+println("P2D模型计算时间: ", p2d_time, " 秒")
+
+# 提取P2D模型结果数据
+US06_time = result["time [s]"]
+US06_voltage_p2d = result["cell voltage [V]"]
+US06_concentration_p2d = result["negative particle surface lithium concentration [mol/m^3]"]
+US06_stress_p2d = result["negative particle surface tangential stress[Pa]"]
+
+# 处理P2D模型结果的维度
+if ndims(US06_concentration_p2d) > 1
+    US06_concentration_p2d = US06_concentration_p2d[1, :]
+end
+
+if ndims(US06_stress_p2d) > 1
+    US06_stress_p2d = US06_stress_p2d[1, :]
+end
+
+# 设置sP2D模型
+opt.model = "sP2D"  # 使用sP2D模型
+println("开始模拟us06工况... sP2D模型")
+case_sP2D = JuBat.SetCase(param_dim, opt)
+result_sP2D = JuBat.Solve(case_sP2D)
+println("sP2D模型模拟完成")
+
+# 测量sP2D模型计算时间
+sp2d_time = @elapsed begin
+    case_sP2D = JuBat.SetCase(param_dim, opt)
+    result_sP2D = JuBat.Solve(case_sP2D)
+end
+println("sP2D模型计算时间: ", sp2d_time, " 秒")
+
+# 提取sP2D模型结果数据
+US06_voltage_sP2D = result_sP2D["cell voltage [V]"]
+US06_concentration_sP2D = result_sP2D["negative particle surface lithium concentration [mol/m^3]"]
+US06_stress_sP2D = result_sP2D["negative particle surface tangential stress[Pa]"]
+
+# 处理sP2D模型结果的维度
+if ndims(US06_concentration_sP2D) > 1
+    US06_concentration_sP2D = US06_concentration_sP2D[2, :]
+end
+
+if ndims(US06_stress_sP2D) > 1
+    US06_stress_sP2D = US06_stress_sP2D[2, :]
+end
+
+# 创建电压图，包括P2D和sP2D的结果
+p6 = plot(US06_time, US06_voltage_p2d, 
+    label="US06_voltage (P2D)", 
+    xlabel="time [s]", 
+    ylabel="voltage [V]", 
+    lw=2, xlims=(0, 625), color=:blue)
+
+plot!(US06_time, US06_voltage_sP2D, 
+    label="US06_voltage (sP2D)", 
+    title="Uvoltage_comparison (P2D vs sP2D)",
+    linestyle=:dash, color=:red)
+
+plot!(UDDS_time, UDDS_voltage_p2d, 
+    label="UDDS_voltage (P2D)", 
+    xlabel="time [s]", 
+    ylabel="voltage [V]", 
+    lw=2, color=:yellow)
+
+plot!(UDDS_time, UDDS_voltage_sP2D, 
+    label="UDDS_voltage (sP2D)", 
+    title="UDDS and US06 voltage_comparison (P2D vs sP2D)",
+    linestyle=:dash, color=:green)
+
+
+
+# 创建浓度图，包括P2D和sP2D的结果
+p7 = plot(US06_time, US06_concentration_p2d, 
+    label="US06_concentration (P2D)", 
+    xlabel="time [s]", 
+    ylabel="concentration [mol/m³]", 
+    lw=2, xlims=(0, 625), color=:blue)
+
+plot!(US06_time, US06_concentration_sP2D, 
+    label="US06_concentration (sP2D)", 
+    title="concentration_comparison (P2D vs sP2D)",
+    linestyle=:dash, color=:fuchsia)
+
+plot!(UDDS_time, UDDS_concentration_p2d, 
+    label="UDDS_concentration (P2D)", 
+    xlabel="time [s]", 
+    ylabel="concentration [mol/m³]", 
+    lw=2, color=:yellow)
+
+plot!(UDDS_time, UDDS_concentration_sP2D, 
+    label="UDDS_concentration (sP2D)", 
+    title="UDDS and US06 concentration_comparison (P2D vs sP2D)",
+    linestyle=:dash, color=:green)
+
+# 创建应力图，包括P2D和sP2D的结果
+p8 = plot(US06_time, US06_stress_p2d, 
+    label="US06_stress (P2D)", 
+    xlabel="time [s]", 
+    title="stress_comparison (P2D vs sP2D)",
+    lw=2, xlims=(0, 625), color=:blue)
+
+plot!(US06_time, US06_stress_sP2D, 
+    label="US06_stress (sP2D)", 
+    ylabel="stress [Pa]", 
+    linestyle=:dash, color=:darkorange)
+
+plot!(UDDS_time, UDDS_stress_p2d, 
+    label="UDDS_stress (P2D)", 
+    xlabel="time [s]", 
+    title="UDDS and US06 stress_comparison (P2D vs sP2D)",
+    lw=2, color=:yellow)
+
+plot!(UDDS_time, UDDS_stress_sP2D, 
+    label="UDDS_stress (sP2D)", 
+    ylabel="stress [Pa]", 
+    linestyle=:dash, color=:green)
+
+# 创建电流图
+p9 = plot(US06_time, [current_interp_US06(t) for t in US06_time], 
+    label="US06_Current", 
+    xlabel="time [s]", 
+    ylabel="Current [A]", 
+    title="US06 Current Profile",
+    lw=2, size=(800, 400), xlims=(0, 625), color=:firebrick)
+
+plot!(UDDS_time, [current_interp_UDDS(t) for t in UDDS_time], 
+    label="UDDS_Current", 
+    xlabel="time [s]", 
+    ylabel="Current [A]", 
+    title="UDDS and US06 Current Profile",
+    lw=2, size=(800, 400), xlims=(0, 625), color=:purple)
+
+# 组合图表
+plot_combined = plot(p6, p7, p8, p9,  
+layout=(4, 1), 
+size=(800, 800))
+
+# 保存图表
+savefig(p6, "us06_UDDS_voltage_comparison.pdf")
+savefig(p7, "us06_UDDS_concentration_comparison.pdf")
+savefig(p8, "us06_UDDS_stress_comparison.pdf")
+savefig(p9, "us06_UDDS_current_profile.pdf")
+
+savefig(plot_combined, "us06_UDDS_battery_analysis_comparison_super.pdf")
+
+  # 计算绝对值差
+  US06_voltage_error = abs.(US06_voltage_sP2D) .- abs.(US06_voltage_p2d)
+  US06_concentration_error = abs.(US06_concentration_sP2D) .- abs.(US06_concentration_p2d)
+  US06_stress_error = abs.(US06_stress_sP2D) .- abs.(US06_stress_p2d)
+  
+  # 计算误差百分比
+  US06_voltage_error_percentage = (US06_voltage_error ./ US06_voltage_p2d) .* 100
+  US06_concentration_error_percentage = (US06_concentration_error ./ US06_concentration_p2d) .* 100
+  US06_stress_error_percentage = (US06_stress_error ./ US06_stress_p2d) .* 100
+  
+  # 获取最大误差
+  max_voltage_error = maximum(US06_voltage_error)
+  max_concentration_error = maximum(US06_concentration_error)
+  max_stress_error = maximum(US06_stress_error)
+  
+  # 获取最大误差百分比
+  max_voltage_error_percentage = maximum(US06_voltage_error_percentage)
+  max_concentration_error_percentage = maximum(US06_concentration_error_percentage)
+  max_stress_error_percentage = maximum(US06_stress_error_percentage)
+
+  # 计算平均绝对误差
+mean_voltage_error = mean(abs.(US06_voltage_error))
+mean_concentration_error = mean(abs.(US06_concentration_error))
+mean_stress_error = mean(abs.(US06_stress_error))
+
+# 计算平均误差百分比（排除除以零的情况）
+function safe_mean_percentage(errors, references)
+    # 统计分母为0的点数
+    zero_count = sum(references .== 0)
+    println("去除了 $zero_count 个分母为0的点。")
+    valid_indices = findall(x -> x != 0, references)
+    isempty(valid_indices) ? 0.0 : mean(abs.(errors[valid_indices] ./ references[valid_indices])) * 100
+end
+
+mean_voltage_error_percentage = safe_mean_percentage(US06_voltage_error, US06_voltage_p2d)
+mean_concentration_error_percentage = safe_mean_percentage(US06_concentration_error, US06_concentration_p2d)
+mean_stress_error_percentage = safe_mean_percentage(US06_stress_error, US06_stress_p2d)
+
+# 创建误差百分比变化图
+p10 = plot(UDDS_time, UDDS_voltage_error_percentage, 
+    label="UDDS_Voltage Error (%)", 
+    xlabel="Time [s]", 
+    ylabel="Error Percentage (%)",
+    title="Model Error Comparison (P2D vs sP2D)",
+    lw=2, color=:green,  xlims=(0, 625), ylims=(-15, 15))  # 调整坐标范围
+
+plot!(UDDS_time, UDDS_concentration_error_percentage, 
+    label="UDDS_Concentration Error (%)", 
+    lw=2, color=:blue)
+
+# 添加应力误差散点（仅有效点）
+scatter!(UDDS_time, UDDS_stress_error_percentage, 
+    label="UDDS_Stress Error (%)", 
+    markershape=:diamond, markercolor=:yellow, 
+    markersize=2)
+
+# 创建误差百分比变化图
+plot!(US06_time, US06_voltage_error_percentage, 
+    label="US06_Voltage Error (%)", 
+    xlabel="Time [s]", 
+    ylabel="Error Percentage (%)",
+    title="Model Error Comparison (P2D vs sP2D)",
+    lw=2, color=:green, ylims=(-15, 15))  # 调整坐标范围
+
+plot!(US06_time, US06_concentration_error_percentage, 
+    label="US06_Concentration Error (%)", 
+    lw=2, color=:blue)
+
+# 添加应力误差散点（仅有效点）
+scatter!(US06_time, US06_stress_error_percentage, 
+    label="US06_Stress Error (%)", 
+    markershape=:diamond, markercolor=:red, 
+    markersize=2)
+
+savefig(p10, "udds_US06_error_percentage_comparison.pdf")
+
+# 打印最大误差和最大误差百分比
+println("最大电压误差: $max_voltage_error V")
+println("平均电压误差: $mean_voltage_error V")
+println("最大电压误差百分比: $max_voltage_error_percentage %")
+println("平均电压误差百分比: $mean_voltage_error_percentage %")
+println("最大浓度误差: $max_concentration_error mol/m³")
+println("平均浓度误差: $mean_concentration_error mol/m³")
+println("最大浓度误差百分比: $max_concentration_error_percentage %")
+println("平均浓度误差百分比: $mean_concentration_error_percentage %")
+println("最大应力误差: $max_stress_error Pa")
+println("平均应力误差: $mean_stress_error Pa")
+println("最大应力误差百分比: $max_stress_error_percentage %")
+println("平均应力误差百分比: $mean_stress_error_percentage %")
+
+  
+  println("分析完成，结果已保存")
+  
+  # 引用信息
+  JuBat.Citation()
